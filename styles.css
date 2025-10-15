@@ -175,6 +175,21 @@ textarea {
   border-bottom: 1px solid var(--card-border);
 }
 
+.table-wrapper td p {
+  margin: 0.35rem 0;
+}
+
+.match-list {
+  margin: 0.35rem 0 0;
+  padding-left: 1.1rem;
+  color: var(--text);
+  font-size: 0.85rem;
+}
+
+.match-list li {
+  margin: 0.2rem 0;
+}
+
 .table-wrapper tbody tr:nth-child(even) {
   background: #f9fbff;
 }

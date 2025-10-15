@@ -69,6 +69,11 @@
           ...(parsed.discounts || {})
         }
       };
+      state.requests = (state.requests || []).map((req) => ({
+        ...req,
+        extractedProducts: Array.isArray(req && req.extractedProducts) ? req.extractedProducts : [],
+        extractionNote: typeof (req && req.extractionNote) === "string" ? req.extractionNote : ""
+      }));
     } catch (error) {
       console.error("Veri yüklenirken hata oluştu", error);
       state = structuredClone(defaultState);
@@ -160,6 +165,10 @@
       "Ürün Adı",
       "Urun",
       "Urun Adı",
+      "Ürün Açıklaması",
+      "Ürün Açiklaması",
+      "Urun Açıklaması",
+      "Urun Aciklamasi",
       "Ürün Kodu",
       "Malzeme",
       "Stok Adı",
@@ -167,7 +176,8 @@
       "Product",
       "Name",
       "Description",
-      "Açıklama"
+      "Açıklama",
+      "Aciklama"
     ];
     for (const key of nameKeys) {
       if (row[key]) {
@@ -181,12 +191,23 @@
     return fallback;
   }
 
-  function detectDescription(row) {
-    const keys = ["Açıklama", "Description", "Detay", "Özellik", "Notes"];
+  function detectDescription(row, fallback = "") {
+    const keys = [
+      "Açıklama",
+      "Aciklama",
+      "Ürün Açıklaması",
+      "Ürün Açiklaması",
+      "Urun Açıklaması",
+      "Urun Aciklamasi",
+      "Description",
+      "Detay",
+      "Özellik",
+      "Notes"
+    ];
     for (const key of keys) {
       if (row[key]) return String(row[key]);
     }
-    return "";
+    return fallback;
   }
 
   function detectUnit(row) {
@@ -195,6 +216,28 @@
       if (row[key]) return String(row[key]);
     }
     return "Adet";
+  }
+
+  function shouldIncludeAlias(value) {
+    if (value === null || value === undefined) return false;
+    if (typeof value === "number") return false;
+    const text = String(value).trim();
+    if (!text) return false;
+    if (text.length <= 2) return false;
+    const numericCandidate = parseNumber(text);
+    return Number.isNaN(numericCandidate);
+  }
+
+  function collectAliasesFromRow(row, name, description) {
+    const aliases = new Set();
+    if (name) aliases.add(String(name));
+    if (description) aliases.add(String(description));
+    Object.values(row || {}).forEach((value) => {
+      if (shouldIncludeAlias(value)) {
+        aliases.add(String(value).trim());
+      }
+    });
+    return Array.from(aliases).slice(0, 12);
   }
 
   function generateId(prefix) {
@@ -207,8 +250,9 @@
       const unitPrice = detectPrice(row);
       if (Number.isNaN(unitPrice)) return;
       const name = detectName(row, `${type} ürün ${index + 1}`);
-      const description = detectDescription(row);
+      const description = detectDescription(row, name);
       const unit = detectUnit(row);
+      const aliases = collectAliasesFromRow(row, name, description);
       items.push({
         id: generateId(type),
         category: type,
@@ -216,7 +260,8 @@
         description,
         unit,
         unitPrice,
-        source: row
+        source: row,
+        aliases
       });
     });
     return items;
@@ -238,6 +283,377 @@
       reader.onerror = () => reject(reader.error);
       reader.readAsDataURL(file);
     });
+  }
+
+  function readFileAsText(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsText(file);
+    });
+  }
+
+  function normaliseForMatch(value) {
+    if (value === null || value === undefined) return "";
+    return String(value)
+      .toLocaleLowerCase("tr-TR")
+      .replace(/[^a-z0-9ğüşöçıİ]+/gi, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function gatherItemAliases(item) {
+    if (Array.isArray(item.aliases) && item.aliases.length) {
+      return item.aliases;
+    }
+    const aliases = new Set();
+    if (item.name) aliases.add(item.name);
+    if (item.description) aliases.add(item.description);
+    if (item.source) {
+      Object.values(item.source).forEach((value) => {
+        if (shouldIncludeAlias(value)) {
+          aliases.add(String(value).trim());
+        }
+      });
+    }
+    return Array.from(aliases);
+  }
+
+  function matchProductByName(candidate) {
+    const candidateNormalised = normaliseForMatch(candidate);
+    if (!candidateNormalised) return null;
+    let bestMatch = null;
+    Object.keys(state.priceLists).forEach((category) => {
+      state.priceLists[category].forEach((item) => {
+        const aliases = gatherItemAliases(item);
+        aliases.forEach((alias) => {
+          const aliasNormalised = normaliseForMatch(alias);
+          if (!aliasNormalised) return;
+          if (
+            candidateNormalised === aliasNormalised ||
+            candidateNormalised.includes(aliasNormalised) ||
+            aliasNormalised.includes(candidateNormalised)
+          ) {
+            const score = aliasNormalised.length;
+            if (!bestMatch || score > bestMatch.score) {
+              bestMatch = { item, score };
+            }
+          }
+        });
+      });
+    });
+    return bestMatch ? bestMatch.item : null;
+  }
+
+  function detectQuantity(row) {
+    if (!row || typeof row !== "object") return null;
+    const preferredKeys = [
+      "Adet",
+      "Adedi",
+      "Adet Sayısı",
+      "Miktar",
+      "Mıktar",
+      "Miktarı",
+      "Qty",
+      "Quantity",
+      "Quantity Requested"
+    ];
+    for (const key of preferredKeys) {
+      if (key in row) {
+        const value = parseNumber(row[key]);
+        if (Number.isFinite(value) && value > 0) {
+          return value;
+        }
+      }
+    }
+    for (const [key, value] of Object.entries(row)) {
+      const lowerKey = key.toLocaleLowerCase("tr-TR");
+      if (lowerKey.includes("adet") || lowerKey.includes("miktar") || lowerKey.includes("qty")) {
+        const parsed = parseNumber(value);
+        if (Number.isFinite(parsed) && parsed > 0) {
+          return parsed;
+        }
+      }
+    }
+    return null;
+  }
+
+  function detectQuantityFromLine(line) {
+    if (!line) return null;
+    const adetMatch = line.match(/(\d+(?:[.,]\d+)?)\s*(adet|pcs|paket|kutu|kg|mt|metre|set|takım|pair)/i);
+    if (adetMatch) {
+      const value = parseNumber(adetMatch[1]);
+      if (Number.isFinite(value) && value > 0) {
+        return value;
+      }
+    }
+    const xMatch = line.match(/(?:x|×|\*)\s*(\d{1,4})/i);
+    if (xMatch) {
+      const value = parseNumber(xMatch[1]);
+      if (Number.isFinite(value) && value > 0) {
+        return value;
+      }
+    }
+    const leadingMatch = line.match(/^(\d{1,4})\b/);
+    if (leadingMatch) {
+      const value = parseNumber(leadingMatch[1]);
+      if (Number.isFinite(value) && value > 0) {
+        return value;
+      }
+    }
+    return null;
+  }
+
+  function sanitiseQuantity(value) {
+    if (value === null || value === undefined) return 1;
+    const numeric = typeof value === "string" ? parseNumber(value) : Number(value);
+    if (!Number.isFinite(numeric) || numeric <= 0) return 1;
+    return Math.max(1, Math.round(numeric));
+  }
+
+  function dedupeMatches(matches) {
+    const map = new Map();
+    matches.forEach((match) => {
+      if (!match || !match.item) return;
+      const key = match.item.id;
+      const quantity = sanitiseQuantity(match.quantity);
+      if (!map.has(key)) {
+        map.set(key, { ...match, quantity });
+      } else {
+        const existing = map.get(key);
+        if (quantity > existing.quantity) {
+          existing.quantity = quantity;
+        }
+      }
+    });
+    return Array.from(map.values());
+  }
+
+  function extractMatchesFromWorkbook(workbook) {
+    if (!workbook) return [];
+    const matches = [];
+    workbook.SheetNames.forEach((sheetName) => {
+      const sheet = workbook.Sheets[sheetName];
+      const rows = XLSX.utils.sheet_to_json(sheet, { defval: "", raw: false });
+      rows.forEach((row) => {
+        const candidateName = detectName(row);
+        if (!candidateName) return;
+        const product = matchProductByName(candidateName);
+        if (!product) return;
+        const quantity =
+          detectQuantity(row) || detectQuantityFromLine(Object.values(row).join(" ")) || 1;
+        matches.push({
+          item: product,
+          quantity,
+          source: candidateName
+        });
+      });
+    });
+    return matches;
+  }
+
+  function findMatchesInText(text) {
+    if (!text) return [];
+    const matches = [];
+    const seenLines = new Set();
+    text
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .forEach((line) => {
+        if (seenLines.has(line)) return;
+        seenLines.add(line);
+        const product = matchProductByName(line);
+        if (product) {
+          matches.push({
+            item: product,
+            quantity: detectQuantityFromLine(line) || 1,
+            source: line
+          });
+        }
+      });
+    if (matches.length) {
+      return matches;
+    }
+    const normalisedText = ` ${normaliseForMatch(text)} `;
+    if (!normalisedText.trim()) return [];
+    const fallbackMatches = [];
+    Object.keys(state.priceLists).forEach((category) => {
+      state.priceLists[category].forEach((item) => {
+        gatherItemAliases(item).forEach((alias) => {
+          const aliasNormalised = normaliseForMatch(alias);
+          if (!aliasNormalised) return;
+          if (normalisedText.includes(` ${aliasNormalised} `)) {
+            fallbackMatches.push({
+              item,
+              quantity: 1,
+              source: alias
+            });
+          }
+        });
+      });
+    });
+    return fallbackMatches;
+  }
+
+  function applyMatchesToDemand(requestId, matches) {
+    const normalisedMatches = dedupeMatches(matches);
+    let added = 0;
+    let updated = 0;
+    normalisedMatches.forEach((match) => {
+      const existing = state.demand.find(
+        (item) => item.requestId === requestId && item.productId === match.item.id
+      );
+      if (existing) {
+        if (match.quantity > existing.quantity) {
+          existing.quantity = match.quantity;
+          updated += 1;
+        }
+        return;
+      }
+      state.demand.push({
+        id: generateId("demand"),
+        requestId,
+        category: match.item.category,
+        productId: match.item.id,
+        productName: match.item.name,
+        unit: match.item.unit,
+        unitPrice: match.item.unitPrice,
+        quantity: match.quantity
+      });
+      added += 1;
+    });
+    return { added, updated, total: matches.length, normalisedMatches };
+  }
+
+  function hasAnyPriceList() {
+    return Object.values(state.priceLists).some((list) => Array.isArray(list) && list.length);
+  }
+
+  function getFileExtension(fileName) {
+    const parts = String(fileName || "").split(".");
+    if (parts.length <= 1) return "";
+    return parts.pop().toLowerCase();
+  }
+
+  async function extractTextFromPdf(buffer) {
+    if (!window.pdfjsLib || !pdfjsLib.getDocument) {
+      return { text: "", note: "PDF analiz kütüphanesi yüklenemedi." };
+    }
+    try {
+      const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
+      let text = "";
+      for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+        const page = await pdf.getPage(pageNumber);
+        const content = await page.getTextContent();
+        const pageText = content.items.map((item) => item.str || "").join(" ");
+        text += `${pageText}\n`;
+      }
+      return { text, note: "" };
+    } catch (error) {
+      console.error("PDF metni çıkarılamadı", error);
+      return { text: "", note: "PDF metni okunamadı." };
+    }
+  }
+
+  async function extractTextFromImage(file) {
+    if (!window.Tesseract || !Tesseract.recognize) {
+      return { text: "", note: "Görüntüden metin çıkarma desteği bulunmuyor." };
+    }
+    try {
+      const result = await Tesseract.recognize(file, "tur+eng");
+      const text = result?.data?.text || "";
+      return { text, note: "" };
+    } catch (error) {
+      console.error("Görüntü metni çıkarılamadı", error);
+      return { text: "", note: "Görüntüden metin okunamadı." };
+    }
+  }
+
+  async function autoExtractFromRequestFile(file, requestRecord) {
+    if (!hasAnyPriceList()) {
+      return {
+        extractedProducts: [],
+        extractionNote: "Fiyat listesi olmadan otomatik çıkarım yapılamıyor.",
+        addedCount: 0
+      };
+    }
+
+    const extension = getFileExtension(file.name);
+    let matches = [];
+    let extractionNote = "";
+    try {
+      if (["xlsx", "xls"].includes(extension)) {
+        const buffer = await readFileAsArrayBuffer(file);
+        const workbook = XLSX.read(buffer, { type: "array" });
+        matches = extractMatchesFromWorkbook(workbook);
+      } else if (extension === "csv") {
+        const text = await readFileAsText(file);
+        const workbook = XLSX.read(text, { type: "string" });
+        matches = extractMatchesFromWorkbook(workbook);
+      } else if (extension === "pdf") {
+        const buffer = await readFileAsArrayBuffer(file);
+        const { text, note } = await extractTextFromPdf(buffer);
+        if (!text) {
+          extractionNote = note || "PDF metni okunamadı.";
+        }
+        matches = text ? findMatchesInText(text) : [];
+      } else if (file.type && file.type.startsWith("image/")) {
+        const { text, note } = await extractTextFromImage(file);
+        if (!text) {
+          extractionNote = note || "Görüntüden metin okunamadı.";
+        }
+        matches = text ? findMatchesInText(text) : [];
+      } else if (file.type && file.type.startsWith("text/")) {
+        const text = await readFileAsText(file);
+        matches = text ? findMatchesInText(text) : [];
+      } else {
+        const text = await readFileAsText(file).catch(() => "");
+        matches = text ? findMatchesInText(text) : [];
+        if (!matches.length && !text) {
+          extractionNote = "Dosya formatı otomatik çıkartma için desteklenmiyor.";
+        }
+      }
+    } catch (error) {
+      console.error("Talep belgesi işlenirken hata oluştu", error);
+      return {
+        extractedProducts: [],
+        extractionNote: "Belge işlenirken hata oluştu. Ürün çıkarılamadı.",
+        addedCount: 0
+      };
+    }
+
+    if (!matches.length) {
+      return {
+        extractedProducts: [],
+        extractionNote: extractionNote || "Belgeden ürün eşleştirilemedi.",
+        addedCount: 0
+      };
+    }
+
+    const result = applyMatchesToDemand(requestRecord.id, matches);
+    const extractedProducts = result.normalisedMatches.map((match) => ({
+      productId: match.item.id,
+      productName: match.item.name,
+      category: match.item.category,
+      quantity: match.quantity
+    }));
+
+    let note = extractionNote;
+    if (result.added) {
+      note = `${result.added} ürün otomatik olarak talep listesine eklendi.`;
+    } else if (result.updated) {
+      note = "Var olan talep kalemleri belgeye göre güncellendi.";
+    } else if (!note) {
+      note = "Eşleşen ürünler zaten talep listesinde yer alıyor.";
+    }
+
+    return {
+      extractedProducts,
+      extractionNote: note,
+      addedCount: result.added
+    };
   }
 
   async function handlePriceUpload(event) {
@@ -278,30 +694,46 @@
   async function handleRequestUpload(event) {
     event.preventDefault();
     const input = document.getElementById("requestFile");
-    if (!input.files.length) return;
+    const files = Array.from(input.files || []);
+    if (!files.length) return;
     const now = new Date().toISOString();
-    for (const file of Array.from(input.files)) {
+    let totalAutoAdded = 0;
+    const createdRequests = [];
+    for (const file of files) {
+      const requestRecord = {
+        id: generateId("request"),
+        name: file.name,
+        size: file.size,
+        type: file.type,
+        uploadedAt: now,
+        dataUrl: null,
+        extractedProducts: [],
+        extractionNote: ""
+      };
       try {
-        let dataUrl = null;
         if (file.size <= 2 * 1024 * 1024) {
-          dataUrl = await readFileAsDataUrl(file);
+          requestRecord.dataUrl = await readFileAsDataUrl(file);
         }
-        state.requests.push({
-          id: generateId("request"),
-          name: file.name,
-          size: file.size,
-          type: file.type,
-          uploadedAt: now,
-          dataUrl
-        });
       } catch (error) {
-        console.error("Belge okunamadı", error);
+        console.error("Belge önizlemesi hazırlanamadı", error);
       }
+      const extraction = await autoExtractFromRequestFile(file, requestRecord);
+      requestRecord.extractedProducts = extraction.extractedProducts;
+      requestRecord.extractionNote = extraction.extractionNote;
+      totalAutoAdded += extraction.addedCount || 0;
+      state.requests.push(requestRecord);
+      createdRequests.push(requestRecord);
     }
     saveState();
     renderRequests();
+    renderDemandTable();
+    renderOfferTable();
     updateRequestOptions();
-    alert(`${input.files.length} belge kaydedildi.`);
+    const messageParts = [`${createdRequests.length} belge kaydedildi.`];
+    if (totalAutoAdded) {
+      messageParts.push(`${totalAutoAdded} ürün otomatik eklendi.`);
+    }
+    alert(messageParts.join(" "));
     event.currentTarget.reset();
   }
 
@@ -395,20 +827,64 @@
             timeStyle: "short"
           }).format(new Date(req.uploadedAt))
         : "-";
-      const noteText = linked
+
+      const documentCell = document.createElement("td");
+      documentCell.innerHTML = `
+        <strong>${req.name}</strong><br /><span class="muted">${req.type || "Dosya"}</span>
+      `;
+
+      const sizeCell = document.createElement("td");
+      sizeCell.textContent = formatBytes(req.size);
+
+      const dateCell = document.createElement("td");
+      dateCell.textContent = date;
+
+      const noteCell = document.createElement("td");
+      const extractionMessage = req.extractionNote;
+      const statusMessage = linked
         ? `${linked} kalem talebe dönüştürüldü.`
         : "Talep listesine aktarılmayı bekliyor.";
-      const downloadHtml = req.dataUrl
-        ? `<a class="btn" download="${req.name}" href="${req.dataUrl}">İndir</a>`
-        : "Önizleme yok";
-      row.innerHTML = `
-        <td>
-          <strong>${req.name}</strong><br /><span class="muted">${req.type || "Dosya"}</span>
-        </td>
-        <td>${formatBytes(req.size)}</td>
-        <td>${date}</td>
-        <td>${noteText}<br />${downloadHtml}</td>
-      `;
+
+      [extractionMessage, statusMessage]
+        .filter(Boolean)
+        .forEach((text) => {
+          const paragraph = document.createElement("p");
+          paragraph.textContent = text;
+          noteCell.appendChild(paragraph);
+        });
+
+      if (Array.isArray(req.extractedProducts) && req.extractedProducts.length) {
+        const listTitle = document.createElement("p");
+        listTitle.textContent = "Çıkarılan ürünler:";
+        noteCell.appendChild(listTitle);
+        const list = document.createElement("ul");
+        list.className = "match-list";
+        req.extractedProducts.forEach((product) => {
+          const item = document.createElement("li");
+          const quantityText = product.quantity && product.quantity !== 1 ? ` × ${product.quantity}` : "";
+          item.textContent = `${labelForCategory(product.category)} - ${product.productName}${quantityText}`;
+          list.appendChild(item);
+        });
+        noteCell.appendChild(list);
+      }
+
+      const downloadWrapper = document.createElement("p");
+      if (req.dataUrl) {
+        const link = document.createElement("a");
+        link.className = "btn";
+        link.download = req.name;
+        link.href = req.dataUrl;
+        link.textContent = "İndir";
+        downloadWrapper.appendChild(link);
+      } else {
+        downloadWrapper.textContent = "Önizleme yok";
+      }
+      noteCell.appendChild(downloadWrapper);
+
+      row.appendChild(documentCell);
+      row.appendChild(sizeCell);
+      row.appendChild(dateCell);
+      row.appendChild(noteCell);
       requestTable.appendChild(row);
     });
     notesArea.value = state.notes || "";
