@@ -33,7 +33,12 @@
             <form class="upload-form" data-type="plastic">
               <label class="form-label">Plastik Fiyat Listesi</label>
               <input type="file" accept=".xlsx" class="price-upload-input" />
-              <button type="submit" class="btn">Yükle</button>
+              <div class="form-actions">
+                <button type="submit" class="btn">Yükle</button>
+                <button type="button" class="btn ghost danger clear-price-list" data-type="plastic">
+                  Listeyi Temizle
+                </button>
+              </div>
               <p class="hint">İpuçu: Ürün adı ve birim fiyat sütunları eklemeyi unutmayın.</p>
               <div class="table-wrapper">
                 <table>
@@ -43,6 +48,7 @@
                       <th>Açıklama</th>
                       <th>Birim</th>
                       <th>Birim Fiyatı</th>
+                      <th>İşlemler</th>
                     </tr>
                   </thead>
                   <tbody class="price-table" data-type="plastic"></tbody>
@@ -52,7 +58,12 @@
             <form class="upload-form" data-type="metal">
               <label class="form-label">Metal Fiyat Listesi</label>
               <input type="file" accept=".xlsx" class="price-upload-input" />
-              <button type="submit" class="btn">Yükle</button>
+              <div class="form-actions">
+                <button type="submit" class="btn">Yükle</button>
+                <button type="button" class="btn ghost danger clear-price-list" data-type="metal">
+                  Listeyi Temizle
+                </button>
+              </div>
               <p class="hint">İpuçu: Ürün adı ve birim fiyat sütunları eklemeyi unutmayın.</p>
               <div class="table-wrapper">
                 <table>
@@ -62,6 +73,7 @@
                       <th>Açıklama</th>
                       <th>Birim</th>
                       <th>Birim Fiyatı</th>
+                      <th>İşlemler</th>
                     </tr>
                   </thead>
                   <tbody class="price-table" data-type="metal"></tbody>
@@ -71,7 +83,12 @@
             <form class="upload-form" data-type="radiator">
               <label class="form-label">Radyatör Fiyat Listesi</label>
               <input type="file" accept=".xlsx" class="price-upload-input" />
-              <button type="submit" class="btn">Yükle</button>
+              <div class="form-actions">
+                <button type="submit" class="btn">Yükle</button>
+                <button type="button" class="btn ghost danger clear-price-list" data-type="radiator">
+                  Listeyi Temizle
+                </button>
+              </div>
               <p class="hint">İpuçu: Ürün adı ve birim fiyat sütunları eklemeyi unutmayın.</p>
               <div class="table-wrapper">
                 <table>
@@ -81,6 +98,7 @@
                       <th>Açıklama</th>
                       <th>Birim</th>
                       <th>Birim Fiyatı</th>
+                      <th>İşlemler</th>
                     </tr>
                   </thead>
                   <tbody class="price-table" data-type="radiator"></tbody>

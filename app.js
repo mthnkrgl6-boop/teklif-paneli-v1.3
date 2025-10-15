@@ -159,36 +159,89 @@
     return NaN;
   }
 
+  function looksLikeSku(value) {
+    if (value === null || value === undefined) return false;
+    const text = String(value).trim();
+    if (!text) return false;
+    if (/\s/.test(text)) return false;
+    if (text.length <= 3) return true;
+    const hasDigit = /\d/.test(text);
+    const hasLetter = /[A-Za-zÇĞİÖŞÜçğıöşü]/.test(text);
+    if (!hasLetter && hasDigit) return true;
+    if (hasDigit && hasLetter) {
+      const letterCount = (text.match(/[A-Za-zÇĞİÖŞÜçğıöşü]/g) || []).length;
+      if (letterCount <= 3) return true;
+      if (/^[A-ZÇĞİÖŞÜ0-9_.\-]+$/.test(text)) return true;
+    }
+    if (!hasDigit && /^[A-ZÇĞİÖŞÜ]{2,4}$/.test(text)) return true;
+    return false;
+  }
+
   function detectName(row, fallback) {
-    const nameKeys = [
+    if (!row || typeof row !== "object") return fallback;
+    const preferredNameKeys = [
       "Ürün",
       "Ürün Adı",
       "Urun",
       "Urun Adı",
+      "Ürün İsmi",
+      "Product Name",
+      "Product",
+      "Malzeme",
+      "Stok Adı",
+      "Stok",
+      "Name"
+    ];
+    let candidate = null;
+    let codeCandidate = null;
+    const seen = new Set();
+    const consider = (key) => {
+      if (!key || seen.has(key)) return;
+      seen.add(key);
+      if (!(key in row)) return;
+      const value = row[key];
+      if (value === null || value === undefined) return;
+      const text = String(value).trim();
+      if (!text) return;
+      if (!looksLikeSku(text)) {
+        if (!candidate) {
+          candidate = text;
+        }
+      } else if (!codeCandidate) {
+        codeCandidate = text;
+      }
+    };
+
+    preferredNameKeys.forEach(consider);
+
+    if (candidate) return candidate;
+
+    const description = detectDescription(row, "");
+    if (description) return description;
+
+    const additionalKeys = [
+      "Description",
       "Ürün Açıklaması",
       "Ürün Açiklaması",
       "Urun Açıklaması",
       "Urun Aciklamasi",
-      "Ürün Kodu",
-      "Malzeme",
-      "Stok Adı",
-      "Stok",
-      "Product",
-      "Name",
-      "Description",
       "Açıklama",
       "Aciklama"
     ];
-    for (const key of nameKeys) {
-      if (row[key]) {
-        return String(row[key]);
-      }
+
+    additionalKeys.forEach(consider);
+    if (candidate) return candidate;
+
+    if (codeCandidate) return codeCandidate;
+
+    for (const value of Object.values(row)) {
+      const text = String(value || "").trim();
+      if (!text) continue;
+      if (!looksLikeSku(text)) return text;
+      if (!codeCandidate) codeCandidate = text;
     }
-    const firstKey = Object.keys(row)[0];
-    if (firstKey) {
-      return String(row[firstKey]);
-    }
-    return fallback;
+
+    return codeCandidate || fallback;
   }
 
   function detectDescription(row, fallback = "") {
@@ -205,9 +258,16 @@
       "Notes"
     ];
     for (const key of keys) {
-      if (row[key]) return String(row[key]);
+      if (!row || !(key in row)) continue;
+      const text = String(row[key] || "").trim();
+      if (!text) continue;
+      if (looksLikeSku(text)) continue;
+      return text;
     }
-    return fallback;
+    if (fallback && !looksLikeSku(fallback)) {
+      return fallback;
+    }
+    return "";
   }
 
   function detectUnit(row) {
@@ -249,8 +309,28 @@
     rows.forEach((row, index) => {
       const unitPrice = detectPrice(row);
       if (Number.isNaN(unitPrice)) return;
-      const name = detectName(row, `${type} ürün ${index + 1}`);
-      const description = detectDescription(row, name);
+      const fallbackName = `${type} ürün ${index + 1}`;
+      const detectedName = detectName(row, fallbackName);
+      const rawDescription = detectDescription(row, "");
+      let name = (detectedName || "").trim() || fallbackName;
+      let description = (rawDescription || "").trim();
+      const originalName = name;
+      if (looksLikeSku(name) && description && !looksLikeSku(description)) {
+        const code = name;
+        name = description;
+        description = code;
+      } else if (!description && looksLikeSku(name)) {
+        description = name;
+      }
+      if (description && description.trim() === name.trim()) {
+        description = "";
+      }
+      if (description && looksLikeSku(description)) {
+        description = "";
+      }
+      if (!description && looksLikeSku(originalName) && !looksLikeSku(name)) {
+        description = originalName;
+      }
       const unit = detectUnit(row);
       const aliases = collectAliasesFromRow(row, name, description);
       items.push({
@@ -783,7 +863,7 @@
       if (!items.length) {
         const row = document.createElement("tr");
         const cell = document.createElement("td");
-        cell.colSpan = 4;
+        cell.colSpan = 5;
         cell.textContent = "Henüz veri yok";
         cell.classList.add("muted");
         row.appendChild(cell);
@@ -792,15 +872,254 @@
       }
       items.forEach((item) => {
         const row = document.createElement("tr");
+        row.dataset.id = item.id;
+        row.dataset.category = category;
         row.innerHTML = `
           <td>${item.name}</td>
           <td>${item.description || "-"}</td>
           <td>${item.unit || "Adet"}</td>
           <td>${formatCurrency(item.unitPrice)}</td>
+          <td class="actions-cell">
+            <div class="table-actions">
+              <button class="btn small" type="button" data-action="edit-price" data-id="${item.id}" data-category="${category}">Düzenle</button>
+              <button class="btn danger small" type="button" data-action="delete-price" data-id="${item.id}" data-category="${category}">Sil</button>
+            </div>
+          </td>
         `;
         tbody.appendChild(row);
       });
     });
+  }
+
+  function getPriceItem(category, itemId) {
+    const list = state.priceLists[category] || [];
+    return list.find((item) => item.id === itemId) || null;
+  }
+
+  function syncDemandWithProduct(product) {
+    let updated = false;
+    state.demand.forEach((line) => {
+      if (line.productId === product.id) {
+        line.productName = product.name;
+        line.unit = product.unit;
+        line.unitPrice = product.unitPrice;
+        line.category = product.category;
+        updated = true;
+      }
+    });
+    return updated;
+  }
+
+  function updateRequestExtractedProducts(product) {
+    state.requests.forEach((req) => {
+      if (!Array.isArray(req.extractedProducts)) return;
+      req.extractedProducts.forEach((extracted) => {
+        if (extracted.productId === product.id) {
+          extracted.productName = product.name;
+          extracted.category = product.category;
+        }
+      });
+    });
+  }
+
+  function removeProductFromRequests(productId) {
+    state.requests.forEach((req) => {
+      if (!Array.isArray(req.extractedProducts)) return;
+      req.extractedProducts = req.extractedProducts.filter((item) => item.productId !== productId);
+    });
+  }
+
+  function removeProductFromDemand(productId) {
+    const before = state.demand.length;
+    state.demand = state.demand.filter((item) => item.productId !== productId);
+    return before - state.demand.length;
+  }
+
+  function openPriceEditModal(category, itemId) {
+    const item = getPriceItem(category, itemId);
+    if (!item) return;
+    const overlay = document.createElement("div");
+    overlay.className = "modal-overlay";
+    const card = document.createElement("div");
+    card.className = "modal-card";
+    const title = document.createElement("h3");
+    title.textContent = "Ürünü Düzenle";
+    const form = document.createElement("form");
+
+    const createInput = (labelText, name, options = {}) => {
+      const wrapper = document.createElement("label");
+      wrapper.textContent = labelText;
+      const input = document.createElement("input");
+      input.name = name;
+      input.value = options.value || "";
+      if (options.type) input.type = options.type;
+      if (options.step) input.step = options.step;
+      if (options.min !== undefined) input.min = options.min;
+      if (options.required) input.required = true;
+      wrapper.appendChild(input);
+      return { wrapper, input };
+    };
+
+    const nameField = createInput("Ürün Adı", "name", { value: item.name || "", required: true });
+    const descriptionField = createInput("Ürün Açıklaması", "description", { value: item.description || "" });
+    const unitField = createInput("Birim", "unit", { value: item.unit || "Adet" });
+    const priceField = createInput("Birim Fiyatı (TL)", "unitPrice", {
+      value: item.unitPrice != null ? String(item.unitPrice) : "",
+      type: "number",
+      step: "0.01",
+      min: "0"
+    });
+
+    [nameField.wrapper, descriptionField.wrapper, unitField.wrapper, priceField.wrapper].forEach((element) => {
+      form.appendChild(element);
+    });
+
+    const actions = document.createElement("div");
+    actions.className = "modal-actions";
+    const cancelButton = document.createElement("button");
+    cancelButton.type = "button";
+    cancelButton.className = "btn ghost";
+    cancelButton.textContent = "Vazgeç";
+    const saveButton = document.createElement("button");
+    saveButton.type = "submit";
+    saveButton.className = "btn primary";
+    saveButton.textContent = "Kaydet";
+    actions.appendChild(cancelButton);
+    actions.appendChild(saveButton);
+    form.appendChild(actions);
+
+    card.appendChild(title);
+    card.appendChild(form);
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
+    requestAnimationFrame(() => overlay.classList.add("visible"));
+    nameField.input.focus();
+
+    const close = () => {
+      overlay.classList.remove("visible");
+      setTimeout(() => overlay.remove(), 200);
+    };
+
+    overlay.addEventListener("click", (event) => {
+      if (event.target === overlay) {
+        close();
+      }
+    });
+    cancelButton.addEventListener("click", close);
+
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const formData = new FormData(form);
+      const name = String(formData.get("name") || "").trim();
+      const description = String(formData.get("description") || "").trim();
+      const unit = String(formData.get("unit") || "Adet").trim() || "Adet";
+      const unitPriceValue = parseNumber(formData.get("unitPrice"));
+      if (!name) {
+        alert("Ürün adı boş bırakılamaz.");
+        nameField.input.focus();
+        return;
+      }
+      if (Number.isNaN(unitPriceValue) || unitPriceValue < 0) {
+        alert("Geçerli bir birim fiyat girin.");
+        priceField.input.focus();
+        return;
+      }
+      item.name = name;
+      item.description = description;
+      item.unit = unit;
+      item.unitPrice = unitPriceValue;
+      const aliasSet = new Set(Array.isArray(item.aliases) ? item.aliases : []);
+      if (name) aliasSet.add(name);
+      if (description) aliasSet.add(description);
+      item.aliases = Array.from(aliasSet).slice(0, 12);
+      const demandUpdated = syncDemandWithProduct(item);
+      updateRequestExtractedProducts(item);
+      saveState();
+      renderPriceTables();
+      renderDemandTable();
+      renderOfferTable();
+      renderRequests();
+      updateProductOptions();
+      close();
+      if (demandUpdated) {
+        alert("Ürün ve ilgili talep kalemleri güncellendi.");
+      } else {
+        alert("Ürün bilgileri güncellendi.");
+      }
+    });
+  }
+
+  function deletePriceItem(category, itemId) {
+    const list = state.priceLists[category] || [];
+    const index = list.findIndex((item) => item.id === itemId);
+    if (index === -1) return;
+    const item = list[index];
+    const confirmation = confirm(
+      `${item.name} ürününü ${labelForCategory(category)} listesinden silmek istediğinize emin misiniz?`
+    );
+    if (!confirmation) return;
+    list.splice(index, 1);
+    const removedDemand = removeProductFromDemand(itemId);
+    removeProductFromRequests(itemId);
+    saveState();
+    renderPriceTables();
+    renderDemandTable();
+    renderOfferTable();
+    renderRequests();
+    updateProductOptions();
+    const messageParts = ["Ürün listeden silindi."];
+    if (removedDemand) {
+      messageParts.push(`${removedDemand} talep kalemi kaldırıldı.`);
+    }
+    alert(messageParts.join(" "));
+  }
+
+  function clearPriceList(category) {
+    const list = state.priceLists[category] || [];
+    if (!list.length) {
+      alert("Liste zaten boş.");
+      return;
+    }
+    const confirmation = confirm(
+      `${labelForCategory(category)} fiyat listesindeki ${list.length} ürünün tamamını silmek istediğinize emin misiniz?`
+    );
+    if (!confirmation) return;
+    const removedIds = new Set(list.map((item) => item.id));
+    state.priceLists[category] = [];
+    delete state.priceMeta[category];
+    state.demand = state.demand.filter((item) => !removedIds.has(item.productId));
+    state.requests.forEach((req) => {
+      if (!Array.isArray(req.extractedProducts)) return;
+      req.extractedProducts = req.extractedProducts.filter((product) => !removedIds.has(product.productId));
+    });
+    saveState();
+    renderPriceTables();
+    renderDemandTable();
+    renderOfferTable();
+    renderRequests();
+    updateProductOptions();
+    alert(`${labelForCategory(category)} fiyat listesi temizlendi.`);
+  }
+
+  function handlePriceTableClick(event) {
+    const button = event.target.closest("button[data-action]");
+    if (!button) return;
+    const action = button.dataset.action;
+    const category = button.dataset.category;
+    const itemId = button.dataset.id;
+    if (!category || !itemId) return;
+    if (action === "edit-price") {
+      openPriceEditModal(category, itemId);
+    } else if (action === "delete-price") {
+      deletePriceItem(category, itemId);
+    }
+  }
+
+  function handleClearPriceList(event) {
+    event.preventDefault();
+    const category = event.currentTarget.dataset.type;
+    if (!category) return;
+    clearPriceList(category);
   }
 
   function countDemandForRequest(requestId) {
@@ -1160,6 +1479,12 @@
     document
       .querySelectorAll("form.upload-form[data-type]")
       .forEach((form) => form.addEventListener("submit", handlePriceUpload));
+    document
+      .querySelectorAll(".clear-price-list")
+      .forEach((button) => button.addEventListener("click", handleClearPriceList));
+    Object.values(priceTableBodies).forEach((tbody) => {
+      tbody.addEventListener("click", handlePriceTableClick);
+    });
     document
       .getElementById("request-upload-form")
       .addEventListener("submit", handleRequestUpload);
