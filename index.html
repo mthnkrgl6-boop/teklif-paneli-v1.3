@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="tr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Teklif Paneli</title>
+    <link rel="stylesheet" href="styles.css" />
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  </head>
+  <body>
+    <header class="app-header">
+      <h1>Teklif Paneli</h1>
+      <p>Müşteri taleplerine hızlı ve tutarlı teklifler oluşturun.</p>
+    </header>
+    <main>
+      <section class="card-grid">
+        <article class="card">
+          <h2>Fiyat Listeleri</h2>
+          <p>
+            Güncel plastik, metal ve radyatör fiyat listelerini Excel (.xlsx) formatında
+            yükleyin. Yüklenen veriler tarayıcınızda saklanır ve teklif hazırlarken
+            kullanılabilir.
+          </p>
+          <div class="upload-grid">
+            <form class="upload-form" data-type="plastic">
+              <label class="form-label">Plastik Fiyat Listesi</label>
+              <input type="file" accept=".xlsx" class="price-upload-input" />
+              <button type="submit" class="btn">Yükle</button>
+              <p class="hint">İpuçu: Ürün adı ve birim fiyat sütunları eklemeyi unutmayın.</p>
+              <div class="table-wrapper">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Ürün</th>
+                      <th>Açıklama</th>
+                      <th>Birim</th>
+                      <th>Birim Fiyatı</th>
+                    </tr>
+                  </thead>
+                  <tbody class="price-table" data-type="plastic"></tbody>
+                </table>
+              </div>
+            </form>
+            <form class="upload-form" data-type="metal">
+              <label class="form-label">Metal Fiyat Listesi</label>
+              <input type="file" accept=".xlsx" class="price-upload-input" />
+              <button type="submit" class="btn">Yükle</button>
+              <p class="hint">İpuçu: Ürün adı ve birim fiyat sütunları eklemeyi unutmayın.</p>
+              <div class="table-wrapper">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Ürün</th>
+                      <th>Açıklama</th>
+                      <th>Birim</th>
+                      <th>Birim Fiyatı</th>
+                    </tr>
+                  </thead>
+                  <tbody class="price-table" data-type="metal"></tbody>
+                </table>
+              </div>
+            </form>
+            <form class="upload-form" data-type="radiator">
+              <label class="form-label">Radyatör Fiyat Listesi</label>
+              <input type="file" accept=".xlsx" class="price-upload-input" />
+              <button type="submit" class="btn">Yükle</button>
+              <p class="hint">İpuçu: Ürün adı ve birim fiyat sütunları eklemeyi unutmayın.</p>
+              <div class="table-wrapper">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Ürün</th>
+                      <th>Açıklama</th>
+                      <th>Birim</th>
+                      <th>Birim Fiyatı</th>
+                    </tr>
+                  </thead>
+                  <tbody class="price-table" data-type="radiator"></tbody>
+                </table>
+              </div>
+            </form>
+          </div>
+        </article>
+        <article class="card">
+          <h2>Teklif Talebi Belgeleri</h2>
+          <p>
+            Müşteriden gelen talep belgelerini (Excel, PDF veya görüntü) yükleyin. Sistem
+            belgeleri saklar ve talep listesi hazırlarken hangi dökümanlardan geldiğini
+            takip etmenize yardımcı olur.
+          </p>
+          <form id="request-upload-form" class="upload-form">
+            <label class="form-label" for="requestFile">Talep Belgesi</label>
+            <input
+              type="file"
+              id="requestFile"
+              accept=".xlsx,.xls,.csv,.pdf,image/*"
+              multiple
+            />
+            <button type="submit" class="btn">Belgeyi Kaydet</button>
+          </form>
+          <div class="table-wrapper">
+            <table>
+              <thead>
+                <tr>
+                  <th>Belge</th>
+                  <th>Boyut</th>
+                  <th>Yüklendi</th>
+                  <th>Not</th>
+                </tr>
+              </thead>
+              <tbody id="requestTable"></tbody>
+            </table>
+          </div>
+          <textarea
+            id="requestNotes"
+            placeholder="Analiz notlarınızı ve çıkarılan ihtiyaçları buraya yazın..."
+          ></textarea>
+        </article>
+      </section>
+      <section class="card">
+        <h2>Talep Listesi Oluştur</h2>
+        <p>
+          Yüklenen fiyat listelerinden ürün seçerek müşteri talep listesini oluşturun.
+          Ürünleri ekledikten sonra iskonto oranları ve KDV otomatik uygulanır.
+        </p>
+        <form id="demand-form" class="demand-form">
+          <div class="form-row">
+            <label for="requestSelect">Talep Belgesi</label>
+            <select id="requestSelect"></select>
+          </div>
+          <div class="form-row">
+            <label for="categorySelect">Kategori</label>
+            <select id="categorySelect">
+              <option value="">Kategori seçin</option>
+              <option value="plastic">Plastik</option>
+              <option value="metal">Metal</option>
+              <option value="radiator">Radyatör</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label for="productSelect">Ürün</label>
+            <select id="productSelect" disabled>
+              <option value="">Önce kategori seçin</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label for="quantityInput">Adet</label>
+            <input type="number" id="quantityInput" min="1" value="1" />
+          </div>
+          <button type="submit" class="btn primary">Talep Listesine Ekle</button>
+        </form>
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>Belge</th>
+                <th>Kategori</th>
+                <th>Ürün</th>
+                <th>Adet</th>
+                <th>Birim</th>
+                <th>Birim Fiyatı</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="demandTable"></tbody>
+          </table>
+        </div>
+      </section>
+      <section class="card">
+        <h2>İskonto ve KDV</h2>
+        <p>Plastik ve metal ürünler için uygulanacak iskontoları belirleyin.</p>
+        <div class="discount-grid">
+          <label>
+            Plastik İskonto (%)
+            <input type="number" id="plasticDiscount" class="discount-input" min="0" max="100" value="0" />
+          </label>
+          <label>
+            Metal İskonto (%)
+            <input type="number" id="metalDiscount" class="discount-input" min="0" max="100" value="0" />
+          </label>
+          <label>
+            Radyatör İskonto (%)
+            <input type="number" id="radiatorDiscount" class="discount-input" min="0" max="100" value="0" />
+          </label>
+          <label>
+            KDV Oranı (%)
+            <input type="number" id="vatRate" min="0" max="100" value="20" />
+          </label>
+        </div>
+      </section>
+      <section class="card">
+        <h2>Teklif Özeti</h2>
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>Kategori</th>
+                <th>Ürün</th>
+                <th>Adet</th>
+                <th>Birim Fiyatı</th>
+                <th>İskonto</th>
+                <th>İskontolu Fiyat</th>
+                <th>KDV Dahil Birim</th>
+                <th>Toplam</th>
+              </tr>
+            </thead>
+            <tbody id="offerTable"></tbody>
+            <tfoot>
+              <tr>
+                <th colspan="5">Ara Toplam</th>
+                <td id="subtotalCell">0</td>
+                <td id="vatCell">0</td>
+                <td id="totalCell">0</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+        <div class="actions">
+          <button id="exportOffer" class="btn primary">Teklifi Excel Olarak Dışa Aktar</button>
+          <button id="clearAll" class="btn danger">Tüm Verileri Temizle</button>
+        </div>
+      </section>
+    </main>
+    <footer class="app-footer">
+      <p>Veriler cihazınızda saklanır. Tarayıcı önbelleğini temizlerseniz kayıtlı listeler silinir.</p>
+    </footer>
+    <script src="app.js"></script>
+  </body>
+</html>
