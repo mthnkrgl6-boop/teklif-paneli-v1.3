@@ -49,6 +49,33 @@
     return JSON.parse(JSON.stringify(value));
   }
 
+  function normalisePriceItem(item, category) {
+    if (!item || typeof item !== "object") return null;
+    const normalised = {
+      ...item,
+      category: item.category || category,
+      name: String(item.name || "").trim(),
+      description: String(item.description || "").trim(),
+      code: String(item.code || "").trim(),
+      unit: item.unit || "Adet"
+    };
+    normalised.id = item.id || generateId(category || "item");
+    const price = Number(item.unitPrice);
+    normalised.unitPrice = Number.isFinite(price) ? price : 0;
+    const aliases = Array.isArray(item.aliases) ? item.aliases : [];
+    const aliasSet = new Set();
+    aliases.forEach((alias) => {
+      if (typeof alias === "string" && alias.trim()) {
+        aliasSet.add(alias.trim());
+      }
+    });
+    if (normalised.name) aliasSet.add(normalised.name);
+    if (normalised.description) aliasSet.add(normalised.description);
+    if (normalised.code) aliasSet.add(normalised.code);
+    normalised.aliases = Array.from(aliasSet).slice(0, 12);
+    return normalised;
+  }
+
   function loadState() {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
@@ -74,6 +101,32 @@
         extractedProducts: Array.isArray(req && req.extractedProducts) ? req.extractedProducts : [],
         extractionNote: typeof (req && req.extractionNote) === "string" ? req.extractionNote : ""
       }));
+      state.requests.forEach((req) => {
+        req.extractedProducts = req.extractedProducts.map((product) => ({
+          ...product,
+          productName: String(product.productName || "").trim(),
+          productCode: String(product.productCode || "").trim(),
+          category: product.category || ""
+        }));
+      });
+      Object.keys(state.priceLists).forEach((category) => {
+        const list = Array.isArray(state.priceLists[category]) ? state.priceLists[category] : [];
+        state.priceLists[category] = list
+          .map((item) => normalisePriceItem(item, category))
+          .filter(Boolean);
+      });
+      state.demand = (state.demand || []).map((item) => {
+        const quantity = Number(item.quantity);
+        const unitPrice = Number(item.unitPrice);
+        return {
+          ...item,
+          productName: String(item.productName || "").trim(),
+          productCode: String(item.productCode || "").trim(),
+          unit: item.unit || "Adet",
+          unitPrice: Number.isFinite(unitPrice) ? unitPrice : 0,
+          quantity: Number.isFinite(quantity) && quantity > 0 ? quantity : 1
+        };
+      });
     } catch (error) {
       console.error("Veri yüklenirken hata oluştu", error);
       state = structuredClone(defaultState);
@@ -177,7 +230,45 @@
     return false;
   }
 
-  function detectName(row, fallback) {
+  function normaliseKey(key) {
+    return String(key || "")
+      .toLocaleLowerCase("tr-TR")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function isCodeKey(key) {
+    const lower = normaliseKey(key);
+    if (!lower) return false;
+    return ["kod", "ürün kod", "urun kod", "stok kod", "product code", "item code", "sku", "malzeme kod"].some(
+      (token) => lower.includes(token)
+    );
+  }
+
+  function detectCode(row) {
+    if (!row || typeof row !== "object") return "";
+    let codeCandidate = "";
+    Object.entries(row).forEach(([key, value]) => {
+      if (codeCandidate) return;
+      if (!isCodeKey(key)) return;
+      const text = String(value || "").trim();
+      if (!text) return;
+      if (looksLikeSku(text) || text.length <= 32) {
+        codeCandidate = text;
+      }
+    });
+    if (codeCandidate) return codeCandidate;
+    for (const value of Object.values(row)) {
+      const text = String(value || "").trim();
+      if (!text) continue;
+      if (looksLikeSku(text)) {
+        return text;
+      }
+    }
+    return "";
+  }
+
+  function detectName(row, fallback, existingCode = "") {
     if (!row || typeof row !== "object") return fallback;
     const preferredNameKeys = [
       "Ürün",
@@ -195,14 +286,17 @@
     let candidate = null;
     let codeCandidate = null;
     const seen = new Set();
+    const codeNormalised = String(existingCode || "").trim().toLocaleLowerCase("tr-TR");
     const consider = (key) => {
       if (!key || seen.has(key)) return;
       seen.add(key);
+      if (isCodeKey(key)) return;
       if (!(key in row)) return;
       const value = row[key];
       if (value === null || value === undefined) return;
       const text = String(value).trim();
       if (!text) return;
+      if (codeNormalised && text.trim().toLocaleLowerCase("tr-TR") === codeNormalised) return;
       if (!looksLikeSku(text)) {
         if (!candidate) {
           candidate = text;
@@ -216,7 +310,7 @@
 
     if (candidate) return candidate;
 
-    const description = detectDescription(row, "");
+    const description = detectDescription(row, "", existingCode);
     if (description) return description;
 
     const additionalKeys = [
@@ -237,6 +331,7 @@
     for (const value of Object.values(row)) {
       const text = String(value || "").trim();
       if (!text) continue;
+      if (codeNormalised && text.trim().toLocaleLowerCase("tr-TR") === codeNormalised) continue;
       if (!looksLikeSku(text)) return text;
       if (!codeCandidate) codeCandidate = text;
     }
@@ -244,7 +339,7 @@
     return codeCandidate || fallback;
   }
 
-  function detectDescription(row, fallback = "") {
+  function detectDescription(row, fallback = "", existingCode = "") {
     const keys = [
       "Açıklama",
       "Aciklama",
@@ -259,8 +354,10 @@
     ];
     for (const key of keys) {
       if (!row || !(key in row)) continue;
+      if (isCodeKey(key)) continue;
       const text = String(row[key] || "").trim();
       if (!text) continue;
+      if (existingCode && text.toLocaleLowerCase("tr-TR") === existingCode.toLocaleLowerCase("tr-TR")) continue;
       if (looksLikeSku(text)) continue;
       return text;
     }
@@ -288,10 +385,11 @@
     return Number.isNaN(numericCandidate);
   }
 
-  function collectAliasesFromRow(row, name, description) {
+  function collectAliasesFromRow(row, name, description, code) {
     const aliases = new Set();
     if (name) aliases.add(String(name));
     if (description) aliases.add(String(description));
+    if (code) aliases.add(String(code));
     Object.values(row || {}).forEach((value) => {
       if (shouldIncludeAlias(value)) {
         aliases.add(String(value).trim());
@@ -310,8 +408,9 @@
       const unitPrice = detectPrice(row);
       if (Number.isNaN(unitPrice)) return;
       const fallbackName = `${type} ürün ${index + 1}`;
-      const detectedName = detectName(row, fallbackName);
-      const rawDescription = detectDescription(row, "");
+      const code = detectCode(row);
+      const detectedName = detectName(row, fallbackName, code);
+      const rawDescription = detectDescription(row, "", code);
       let name = (detectedName || "").trim() || fallbackName;
       let description = (rawDescription || "").trim();
       const originalName = name;
@@ -332,12 +431,13 @@
         description = originalName;
       }
       const unit = detectUnit(row);
-      const aliases = collectAliasesFromRow(row, name, description);
+      const aliases = collectAliasesFromRow(row, name, description, code);
       items.push({
         id: generateId(type),
         category: type,
         name,
         description,
+        code,
         unit,
         unitPrice,
         source: row,
@@ -390,6 +490,7 @@
     const aliases = new Set();
     if (item.name) aliases.add(item.name);
     if (item.description) aliases.add(item.description);
+    if (item.code) aliases.add(item.code);
     if (item.source) {
       Object.values(item.source).forEach((value) => {
         if (shouldIncludeAlias(value)) {
@@ -517,7 +618,8 @@
       const sheet = workbook.Sheets[sheetName];
       const rows = XLSX.utils.sheet_to_json(sheet, { defval: "", raw: false });
       rows.forEach((row) => {
-        const candidateName = detectName(row);
+        const code = detectCode(row);
+        const candidateName = detectName(row, undefined, code);
         if (!candidateName) return;
         const product = matchProductByName(candidateName);
         if (!product) return;
@@ -586,6 +688,10 @@
         (item) => item.requestId === requestId && item.productId === match.item.id
       );
       if (existing) {
+        existing.productName = match.item.name;
+        existing.productCode = match.item.code;
+        existing.unit = match.item.unit;
+        existing.unitPrice = match.item.unitPrice;
         if (match.quantity > existing.quantity) {
           existing.quantity = match.quantity;
           updated += 1;
@@ -598,6 +704,7 @@
         category: match.item.category,
         productId: match.item.id,
         productName: match.item.name,
+        productCode: match.item.code,
         unit: match.item.unit,
         unitPrice: match.item.unitPrice,
         quantity: match.quantity
@@ -716,6 +823,7 @@
     const extractedProducts = result.normalisedMatches.map((match) => ({
       productId: match.item.id,
       productName: match.item.name,
+      productCode: match.item.code,
       category: match.item.category,
       quantity: match.quantity
     }));
@@ -749,7 +857,7 @@
       const sheetName = workbook.SheetNames[0];
       const sheet = workbook.Sheets[sheetName];
       const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
-      const parsed = parsePriceList(type, rows);
+      const parsed = parsePriceList(type, rows).map((item) => normalisePriceItem(item, type)).filter(Boolean);
       if (!parsed.length) {
         alert("Listede okunabilir ürün bulunamadı. Lütfen sütun başlıklarını kontrol edin.");
         return;
@@ -850,7 +958,8 @@
     state.priceLists[category].forEach((item) => {
       const option = document.createElement("option");
       option.value = item.id;
-      option.textContent = `${item.name} (${formatCurrency(item.unitPrice)})`;
+      const nameWithCode = item.code ? `${item.name} • ${item.code}` : item.name;
+      option.textContent = `${nameWithCode} (${formatCurrency(item.unitPrice)})`;
       productSelect.appendChild(option);
     });
   }
@@ -863,7 +972,7 @@
       if (!items.length) {
         const row = document.createElement("tr");
         const cell = document.createElement("td");
-        cell.colSpan = 5;
+        cell.colSpan = 6;
         cell.textContent = "Henüz veri yok";
         cell.classList.add("muted");
         row.appendChild(cell);
@@ -875,7 +984,8 @@
         row.dataset.id = item.id;
         row.dataset.category = category;
         row.innerHTML = `
-          <td>${item.name}</td>
+          <td>${item.name || "-"}</td>
+          <td>${item.code || "-"}</td>
           <td>${item.description || "-"}</td>
           <td>${item.unit || "Adet"}</td>
           <td>${formatCurrency(item.unitPrice)}</td>
@@ -901,6 +1011,7 @@
     state.demand.forEach((line) => {
       if (line.productId === product.id) {
         line.productName = product.name;
+        line.productCode = product.code;
         line.unit = product.unit;
         line.unitPrice = product.unitPrice;
         line.category = product.category;
@@ -916,6 +1027,7 @@
       req.extractedProducts.forEach((extracted) => {
         if (extracted.productId === product.id) {
           extracted.productName = product.name;
+          extracted.productCode = product.code;
           extracted.category = product.category;
         }
       });
@@ -961,6 +1073,7 @@
     };
 
     const nameField = createInput("Ürün Adı", "name", { value: item.name || "", required: true });
+    const codeField = createInput("Ürün Kodu", "code", { value: item.code || "" });
     const descriptionField = createInput("Ürün Açıklaması", "description", { value: item.description || "" });
     const unitField = createInput("Birim", "unit", { value: item.unit || "Adet" });
     const priceField = createInput("Birim Fiyatı (TL)", "unitPrice", {
@@ -970,7 +1083,7 @@
       min: "0"
     });
 
-    [nameField.wrapper, descriptionField.wrapper, unitField.wrapper, priceField.wrapper].forEach((element) => {
+    [nameField.wrapper, codeField.wrapper, descriptionField.wrapper, unitField.wrapper, priceField.wrapper].forEach((element) => {
       form.appendChild(element);
     });
 
@@ -1011,6 +1124,7 @@
       event.preventDefault();
       const formData = new FormData(form);
       const name = String(formData.get("name") || "").trim();
+      const code = String(formData.get("code") || "").trim();
       const description = String(formData.get("description") || "").trim();
       const unit = String(formData.get("unit") || "Adet").trim() || "Adet";
       const unitPriceValue = parseNumber(formData.get("unitPrice"));
@@ -1026,11 +1140,13 @@
       }
       item.name = name;
       item.description = description;
+      item.code = code;
       item.unit = unit;
       item.unitPrice = unitPriceValue;
       const aliasSet = new Set(Array.isArray(item.aliases) ? item.aliases : []);
       if (name) aliasSet.add(name);
       if (description) aliasSet.add(description);
+      if (code) aliasSet.add(code);
       item.aliases = Array.from(aliasSet).slice(0, 12);
       const demandUpdated = syncDemandWithProduct(item);
       updateRequestExtractedProducts(item);
@@ -1181,7 +1297,8 @@
         req.extractedProducts.forEach((product) => {
           const item = document.createElement("li");
           const quantityText = product.quantity && product.quantity !== 1 ? ` × ${product.quantity}` : "";
-          item.textContent = `${labelForCategory(product.category)} - ${product.productName}${quantityText}`;
+          const codeText = product.productCode ? ` (${product.productCode})` : "";
+          item.textContent = `${labelForCategory(product.category)} - ${product.productName}${codeText}${quantityText}`;
           list.appendChild(item);
         });
         noteCell.appendChild(list);
@@ -1229,7 +1346,12 @@
       row.innerHTML = `
         <td>${requestLabel}</td>
         <td>${labelForCategory(item.category)}</td>
-        <td>${item.productName}</td>
+        <td>
+          <div class="table-product">
+            <span class="product-name">${item.productName || "-"}</span>
+            ${item.productCode ? `<span class="product-code">${item.productCode}</span>` : ""}
+          </div>
+        </td>
         <td><input type="number" min="1" value="${item.quantity}" class="quantity-input" data-id="${item.id}" /></td>
         <td>${item.unit || "Adet"}</td>
         <td>${formatCurrency(item.unitPrice)}</td>
@@ -1280,7 +1402,12 @@
       const row = document.createElement("tr");
       row.innerHTML = `
         <td>${labelForCategory(item.category)}</td>
-        <td>${item.productName}</td>
+        <td>
+          <div class="table-product">
+            <span class="product-name">${item.productName || "-"}</span>
+            ${item.productCode ? `<span class="product-code">${item.productCode}</span>` : ""}
+          </div>
+        </td>
         <td>${item.quantity}</td>
         <td>${formatCurrency(item.unitPrice)}</td>
         <td>${formatPercent(discountRate)}</td>
@@ -1323,6 +1450,7 @@
       category,
       productId,
       productName: product.name,
+      productCode: product.code,
       unit: product.unit,
       unitPrice: product.unitPrice,
       quantity
@@ -1403,6 +1531,7 @@
       return {
         Kategori: labelForCategory(item.category),
         Ürün: item.productName,
+        "Ürün Kodu": item.productCode || "",
         Adet: item.quantity,
         Birim: item.unit,
         "Birim Fiyatı": item.unitPrice,
@@ -1419,6 +1548,7 @@
       [
         "Kategori",
         "Ürün",
+        "Ürün Kodu",
         "Adet",
         "Birim",
         "Birim Fiyatı",
@@ -1431,6 +1561,7 @@
     const dataRows = rows.map((row) => [
       row.Kategori,
       row.Ürün,
+      row["Ürün Kodu"],
       row.Adet,
       row.Birim,
       row["Birim Fiyatı"],
@@ -1441,9 +1572,9 @@
     ]);
     const summary = [
       [],
-      ["Ara Toplam", "", "", "", "", "", subtotal],
-      ["KDV", "", "", "", "", "", vatTotal],
-      ["Genel Toplam", "", "", "", "", "", subtotal + vatTotal]
+      ["Ara Toplam", "", "", "", "", "", "", "", "", subtotal],
+      ["KDV", "", "", "", "", "", "", "", "", vatTotal],
+      ["Genel Toplam", "", "", "", "", "", "", "", "", subtotal + vatTotal]
     ];
     const ws = XLSX.utils.aoa_to_sheet([...header, ...dataRows, ...summary]);
     XLSX.utils.book_append_sheet(wb, ws, "Teklif");

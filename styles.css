@@ -200,6 +200,23 @@ textarea {
   border-bottom: 1px solid var(--card-border);
 }
 
+.table-product {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  align-items: flex-start;
+}
+
+.table-product .product-name {
+  font-weight: 600;
+}
+
+.table-product .product-code {
+  font-size: 0.75rem;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+}
+
 .table-wrapper td p {
   margin: 0.35rem 0;
 }
